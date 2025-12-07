@@ -4,6 +4,7 @@ import { parseM3U } from '@/lib/iptv/m3u-parser';
 import { SourceProcessor } from '@/lib/iptv/source-processor';
 import { StreamTester } from '@/lib/iptv/stream-tester';
 import { calculateQualityMetrics } from '@/lib/iptv/metrics';
+import { supabase } from '@/lib/supabase';
 import type { Channel, StreamTestResult } from '@/lib/types';
 
 const tracker = new RepositoryTracker();
@@ -14,12 +15,9 @@ function calculateQualityScore(result: StreamTestResult): number {
   if (result.status === 'failure') {
     return 0;
   }
-
-  // Use actual bitrate directly, scaled to 0-100 (assuming 10000 Kbps = 100%)
   if (result.bitrateKbps > 0) {
     return Math.min(100, Math.round((result.bitrateKbps / 10000) * 100));
   }
-
   return 0;
 }
 
@@ -29,13 +27,11 @@ async function testChannelsForSource(
 ): Promise<{ tested: number; active: number; inactive: number }> {
   const channels = await processor.getChannelsBySource(source);
 
-  // Prioritize untested channels, then inactive, then active (for re-testing)
   const sortedChannels = channels.sort(function prioritize(a, b) {
     if (a.status === 'untested' && b.status !== 'untested') return -1;
     if (a.status !== 'untested' && b.status === 'untested') return 1;
     if (a.status === 'inactive' && b.status === 'active') return -1;
     if (a.status === 'active' && b.status === 'inactive') return 1;
-    // For same status, prefer channels that haven't been tested recently
     const aTested = a.lastTested ? new Date(a.lastTested).getTime() : 0;
     const bTested = b.lastTested ? new Date(b.lastTested).getTime() : 0;
     return aTested - bTested;
@@ -65,7 +61,6 @@ async function testChannelsForSource(
       tested += 1;
     } catch (error) {
       console.error(`Failed to test channel ${channel.id}:`, error);
-      // Mark as inactive on error
       await processor.patchChannel(channel.id, {
         status: 'inactive',
         lastTested: new Date().toISOString(),
@@ -79,23 +74,21 @@ async function testChannelsForSource(
 }
 
 /**
- * Combined cron job that:
+ * Manual database population endpoint
+ * 
+ * This endpoint:
  * 1. Validates all required tables exist
- * 2. Checks for repository updates
- * 3. Fetches and processes updated repositories
- * 4. Automatically tests channels from updated repositories
- * 5. Saves test results to test_results table
- * 6. Calculates and saves quality metrics to quality_metrics table
- * 7. Logs updates to repository_updates table
+ * 2. Initializes repositories if needed
+ * 3. Fetches all repositories (force fetch)
+ * 4. Parses and saves channels
+ * 5. Tests channels (up to 100 per repository)
+ * 6. Calculates quality metrics
  * 
- * Runs every 12 hours via Vercel Cron
- * 
- * REQUIRES ALL TABLES: repositories, channels, test_results, quality_metrics, repository_updates
+ * Can be called manually from the UI to populate the database
  */
-export async function GET() {
+export async function POST() {
   try {
-    // Step 0: Validate all required tables exist (MANDATORY)
-    const { supabase } = await import('@/lib/supabase');
+    // Step 0: Validate all required tables exist
     const REQUIRED_TABLES = ['repositories', 'channels', 'test_results', 'quality_metrics', 'repository_updates'];
     const missingTables: string[] = [];
 
@@ -115,33 +108,39 @@ export async function GET() {
         {
           error: 'Missing required database tables',
           missingTables,
-          message: `The following required tables are missing: ${missingTables.join(', ')}. Please run the database migration (supabase/migrations/001_initial_schema.sql)`,
+          message: `The following required tables are missing: ${missingTables.join(', ')}. Please run the database migration.`,
         },
         { status: 500 },
       );
     }
 
-    // Step 1: Check for repository updates (uses repositories table)
-    const updatedRepositories = await tracker.checkForUpdates();
-    
-    if (updatedRepositories.length === 0) {
-      return NextResponse.json({
-        message: 'No repository updates detected',
-        tablesValidated: true,
-        checkedAt: new Date().toISOString(),
-      });
+    // Step 1: Initialize repositories if needed
+    let tracked = await tracker.loadTrackedRepositories();
+    if (tracked.length === 0) {
+      console.log('[Populate] No repositories found, initializing from config...');
+      tracked = await tracker.initializeDefaultRepositories();
     }
 
-    // Step 2: Process each updated repository
+    if (tracked.length === 0) {
+      return NextResponse.json(
+        {
+          error: 'No repositories configured',
+          message: 'No repositories found and unable to initialize from config. Please check your source-repositories.json file.',
+        },
+        { status: 400 },
+      );
+    }
+
+    // Step 2: Fetch and process all repositories
     const results: Array<{
       repository: string;
       channelsProcessed: number;
       testResults: { tested: number; active: number; inactive: number };
     }> = [];
 
-    for (const repository of updatedRepositories) {
+    for (const repository of tracked) {
       try {
-        // Fetch updated files
+        // Fetch files from repository
         const files = await tracker.fetchUpdatedFiles(repository);
         const channels: Channel[] = [];
 
@@ -154,17 +153,22 @@ export async function GET() {
         }
 
         if (channels.length > 0) {
-          // Save channels (uses channels table and repository_updates table)
+          // Save channels
           await processor.saveChannels(repository.id, channels);
 
-          // Step 3: Automatically test channels for this source
-          // This uses: test_results table, quality_metrics table, and updates channels table
+          // Test channels (limit to 100 per repository to avoid timeout)
           const testResults = await testChannelsForSource(repository.id, 100);
 
           results.push({
             repository: repository.id,
             channelsProcessed: channels.length,
             testResults,
+          });
+        } else {
+          results.push({
+            repository: repository.id,
+            channelsProcessed: 0,
+            testResults: { tested: 0, active: 0, inactive: 0 },
           });
         }
       } catch (error) {
@@ -188,25 +192,29 @@ export async function GET() {
     }, 0);
 
     return NextResponse.json({
-      message: 'Repositories checked and processed successfully. All required tables used.',
-      tablesValidated: true,
-      repositoriesChecked: updatedRepositories.length,
+      success: true,
+      message: 'Database populated successfully',
       repositoriesProcessed: results.length,
       totalChannelsProcessed: totalChannels,
       totalChannelsTested: totalTested,
       totalActiveChannels: totalActive,
       results,
-      checkedAt: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error('Error in check-and-update cron job:', error);
+    console.error('Error populating database:', error);
     return NextResponse.json(
       {
-        error: 'Failed to check and update repositories',
+        error: 'Failed to populate database',
         message: error instanceof Error ? error.message : 'Unknown error',
       },
       { status: 500 },
     );
   }
+}
+
+// Also allow GET for easy testing
+export async function GET() {
+  return POST();
 }
 

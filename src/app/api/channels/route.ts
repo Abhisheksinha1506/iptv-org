@@ -39,21 +39,21 @@ async function enrichChannelsBatch(
 
   // Enrich channels with batch-fetched data
   return channels.map(function enrich(channel) {
-    const enriched: ChannelWithMetrics = { ...channel };
+  const enriched: ChannelWithMetrics = { ...channel };
 
     const latestTestResult = testResultsMap.get(channel.id);
     if (latestTestResult) {
       enriched.latestBitrate = latestTestResult.bitrateKbps;
       enriched.latestResolution = latestTestResult.resolution;
       enriched.latestResponseTime = latestTestResult.responseTimeMs;
-    }
+  }
 
     const qualityMetrics = qualityMetricsMap.get(channel.id);
-    if (qualityMetrics) {
-      enriched.uptimePercentage = qualityMetrics.uptimePercentage;
-    }
+  if (qualityMetrics) {
+    enriched.uptimePercentage = qualityMetrics.uptimePercentage;
+  }
 
-    return enriched;
+  return enriched;
   });
 }
 
