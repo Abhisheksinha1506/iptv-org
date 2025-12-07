@@ -101,10 +101,12 @@ async function testAndEnrichChannels(
  * 2. Initializes repositories if needed
  * 3. Fetches all repositories (force fetch)
  * 4. Parses channels from M3U files
- * 5. Tests ALL channels BEFORE saving (ensures status and quality scores are set)
- * 6. Calculates quality metrics for ALL channels
- * 7. Saves channels with complete data (status, qualityScore, lastTested)
- * 8. Saves test results and quality metrics to their respective tables
+ * 5. Saves channels immediately (to avoid timeout)
+ * 6. Tests channels in batches (up to 50 per repository to avoid timeout)
+ * 7. Updates channels with test results and quality metrics
+ * 
+ * Note: To avoid 504 timeouts, we save channels first, then test a limited batch.
+ * Remaining channels can be tested later via the test-streams endpoint.
  * 
  * Can be called manually from the UI to populate the database
  */
@@ -157,7 +159,7 @@ export async function POST() {
     const results: Array<{
       repository: string;
       channelsProcessed: number;
-      testResults: { tested: number; active: number; inactive: number };
+      testResults: { tested: number; active: number; inactive: number; note?: string };
     }> = [];
 
     for (const repository of tracked) {
@@ -175,15 +177,33 @@ export async function POST() {
         }
 
         if (channels.length > 0) {
-          // Step 1: Test ALL channels BEFORE saving (ensures status and quality scores are set)
-          console.log(`[Populate] Testing ${channels.length} channels for ${repository.id}...`);
-          const { tested, active, inactive, enrichedChannels, testResults, qualityMetrics } = await testAndEnrichChannels(channels);
+          // Step 1: Save channels immediately (with untested status to avoid timeout)
+          console.log(`[Populate] Saving ${channels.length} channels for ${repository.id}...`);
+          await processor.saveChannels(repository.id, channels);
 
-          // Step 2: Save channels with complete data (status, qualityScore, lastTested already set)
-          console.log(`[Populate] Saving ${enrichedChannels.length} channels with test results for ${repository.id}...`);
-          await processor.saveChannels(repository.id, enrichedChannels);
+          // Step 2: Test a limited batch of channels (50 per repository to avoid timeout)
+          // This ensures at least some channels have status and quality scores
+          const testLimit = 50;
+          const channelsToTest = channels.slice(0, testLimit);
+          console.log(`[Populate] Testing ${channelsToTest.length} of ${channels.length} channels for ${repository.id}...`);
+          
+          const { tested, active, inactive, enrichedChannels, testResults, qualityMetrics } = await testAndEnrichChannels(channelsToTest);
 
-          // Step 3: Save test results and quality metrics for all tested channels
+          // Step 3: Update tested channels with their results
+          for (let i = 0; i < enrichedChannels.length; i++) {
+            try {
+              const enrichedChannel = enrichedChannels[i];
+              await processor.patchChannel(enrichedChannel.id, {
+                status: enrichedChannel.status,
+                qualityScore: enrichedChannel.qualityScore,
+                lastTested: enrichedChannel.lastTested,
+              });
+            } catch (error) {
+              console.error(`Failed to update channel ${enrichedChannels[i]?.id}:`, error);
+            }
+          }
+
+          // Step 4: Save test results and quality metrics for tested channels
           console.log(`[Populate] Saving test results and quality metrics for ${repository.id}...`);
           for (let i = 0; i < testResults.length; i++) {
             try {
@@ -204,7 +224,12 @@ export async function POST() {
           results.push({
             repository: repository.id,
             channelsProcessed: channels.length,
-            testResults: { tested, active, inactive },
+            testResults: { 
+              tested, 
+              active, 
+              inactive,
+              note: channels.length > testLimit ? `${channels.length - testLimit} channels saved but not yet tested (use test-streams endpoint to test remaining)` : undefined,
+            },
           });
         } else {
           results.push({
