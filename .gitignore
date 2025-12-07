@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+*.log
 
 # next.js
 /.next/
@@ -23,6 +24,12 @@
 # misc
 .DS_Store
 *.pem
+.data/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # debug
 npm-debug.log*
@@ -30,8 +37,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
-.env*
+# Environment variables (keep env.example)
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env*.local
+!env.example
 
 # vercel
 .vercel
@@ -39,3 +52,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Supabase
+.supabase/
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+.cache/

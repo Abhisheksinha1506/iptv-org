@@ -1,14 +1,31 @@
 {
-  "name": "iptv-app",
+  "name": "iptv-fusion-hub",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "format": "prettier --write \"src/**/*.{ts,tsx,md}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,md}\"",
+    "cron:check": "node scripts/run-cron.mjs check-repos",
+    "cron:update": "node scripts/run-cron.mjs update-sources",
+    "cron:check-and-update": "node scripts/run-cron.mjs check-and-update",
+    "cron:force-fetch": "node scripts/run-cron.mjs force-fetch",
+    "cron:test": "node scripts/run-cron.mjs test-streams",
+    "cron:metrics": "node scripts/run-cron.mjs calculate-metrics",
+    "cron:reset-tests": "node scripts/run-cron.mjs reset-tests",
+    "seed": "ts-node --project tsconfig.json scripts/seed.ts",
+    "test": "vitest",
+    "test:connection": "ts-node --project tsconfig.json scripts/test-connection.ts",
+    "migration:print": "node scripts/print-migration.js",
+    "migration:check": "node scripts/run-migration-api.mjs",
+    "migration:run": "node scripts/execute-migration.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.86.2",
+    "date-fns": "^4.1.0",
     "next": "16.0.4",
     "react": "19.2.0",
     "react-dom": "19.2.0"
@@ -18,9 +35,14 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.2.3",
     "eslint": "^9",
     "eslint-config-next": "16.0.4",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "ts-node": "^10.9.2",
+    "typescript": "^5",
+    "vitest": "^4.0.13"
   }
 }

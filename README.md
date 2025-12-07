@@ -1,36 +1,90 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## IPTV Fusion Hub
 
-## Getting Started
+This repository hosts the **IPTV Fusion Hub**, a stream aggregation and analytics platform designed for Vercel's serverless stack. The app is written in Next.js 16 with the App Router, Tailwind CSS, and TypeScript, using Supabase for data storage.
 
-First, run the development server:
+## Requirements
+
+- Node.js 18+
+- npm 10+
+- Supabase account and project
+- GitHub personal access token (for API rate limits)
+
+## Environment Configuration
+
+1. Copy the sample environment file:
+
+   ```bash
+   cp env.example .env.local
+   ```
+
+2. Fill in the following values:
+
+   - `SUPABASE_URL`: Your Supabase project URL
+   - `SUPABASE_SERVICE_ROLE_KEY`: Your Supabase service role key (from Supabase dashboard → Settings → API)
+   - `GITHUB_TOKEN`: Personal access token for higher rate limits when polling source repositories
+   - `NEXT_PUBLIC_APP_URL`: Your app URL (defaults to `http://localhost:3000` for local dev)
+   - `NEXT_PUBLIC_APP_NAME`: App name (defaults to "IPTV Fusion Hub")
+
+## Database Setup
+
+1. Create a Supabase project at https://supabase.com
+2. Run the migration SQL file in your Supabase SQL editor:
+   - File: `supabase/migrations/001_initial_schema.sql`
+   - This creates all required tables: `channels`, `test_results`, `quality_metrics`, `repositories`, `repository_updates`
+
+## Scripts
+
+| Command                  | Description                                  |
+| ------------------------ | -------------------------------------------- |
+| `npm run dev`            | Start the Next.js dev server                  |
+| `npm run build`          | Create a production build                     |
+| `npm run start`          | Run the built app                             |
+| `npm run lint`           | Execute ESLint with Next.js + Prettier config |
+| `npm run format`          | Format source files with Prettier             |
+| `npm run format:check`    | Verify formatting without making changes      |
+| `npm run cron:*`         | Hit local cron endpoints (requires dev server)|
+
+### Local Cron Simulator
+
+Vercel Cron requests are emulated locally via `scripts/run-cron.mjs`. Start `npm run dev` in one terminal, then from another terminal run:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm run cron:check-and-update  # Main cron job (checks repos, updates, and tests)
+npm run cron:check              # Check for repository updates only
+npm run cron:update             # Update sources only
+npm run cron:test               # Test streams only
+npm run cron:metrics            # Calculate quality metrics
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Each command issues an HTTP request to the corresponding `/api/cron/*` route so you can debug scheduled workflows without deploying to Vercel.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Automated Polling
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The application uses **polling** to check for repository updates every **12 hours** via Vercel Cron:
 
-## Learn More
+- **Schedule**: Every 12 hours (configured in `vercel.json`)
+- **Endpoint**: `/api/cron/check-and-update`
+- **Process**: 
+  1. Checks tracked repositories for updates (compares commit SHAs)
+  2. Fetches and parses M3U files from updated repositories
+  3. Saves channels to Supabase
+  4. Automatically tests channels from updated repositories
+  5. Calculates and saves quality metrics
 
-To learn more about Next.js, take a look at the following resources:
+This approach eliminates the need for GitHub webhooks and ensures reliable updates even if webhooks fail.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Architecture
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Storage**: Supabase PostgreSQL database
+- **Caching**: Next.js ISR (Incremental Static Regeneration) with 1-hour revalidation
+- **Polling**: Vercel Cron jobs run every 12 hours to check for repository updates
+- **Real-time**: Server-Sent Events (SSE) for live update notifications in the dashboard
+- **Testing**: Automated stream testing triggered when repositories are updated
 
-## Deploy on Vercel
+## Features
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Automatic repository monitoring and channel aggregation
+- Stream quality testing and metrics calculation
+- Real-time dashboard with filtering and pagination
+- ISR for fast page loads with automatic background updates
+- Comprehensive quality scoring based on uptime, stability, video quality, and geo-availability

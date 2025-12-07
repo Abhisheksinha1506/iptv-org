@@ -1,0 +1,19 @@
+{
+  "repositories": [
+    {
+      "id": "herberthe-iptv-sources",
+      "owner": "HerbertHe",
+      "repo": "iptv-sources",
+      "branch": "main",
+      "paths": ["README.md", "public/"]
+    },
+    {
+      "id": "iptv-org-iptv",
+      "owner": "iptv-org",
+      "repo": "iptv",
+      "branch": "master",
+      "paths": ["README.md", "streams/"]
+    }
+  ]
+}
+
