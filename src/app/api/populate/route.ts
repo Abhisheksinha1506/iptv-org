@@ -21,56 +21,76 @@ function calculateQualityScore(result: StreamTestResult): number {
   return 0;
 }
 
-async function testChannelsForSource(
-  source: string,
-  limit: number = 100,
-): Promise<{ tested: number; active: number; inactive: number }> {
-  const channels = await processor.getChannelsBySource(source);
-
-  const sortedChannels = channels.sort(function prioritize(a, b) {
-    if (a.status === 'untested' && b.status !== 'untested') return -1;
-    if (a.status !== 'untested' && b.status === 'untested') return 1;
-    if (a.status === 'inactive' && b.status === 'active') return -1;
-    if (a.status === 'active' && b.status === 'inactive') return 1;
-    const aTested = a.lastTested ? new Date(a.lastTested).getTime() : 0;
-    const bTested = b.lastTested ? new Date(b.lastTested).getTime() : 0;
-    return aTested - bTested;
-  });
-
-  const targetChannels = sortedChannels.slice(0, limit);
+/**
+ * Test channels and update them with test results and quality metrics
+ * This happens BEFORE saving to database so all channels have proper status and scores
+ * Returns both enriched channels and test results for saving
+ */
+async function testAndEnrichChannels(
+  channels: Channel[],
+): Promise<{
+  tested: number;
+  active: number;
+  inactive: number;
+  enrichedChannels: Channel[];
+  testResults: StreamTestResult[];
+  qualityMetrics: Array<{ channelId: string; metrics: ReturnType<typeof calculateQualityMetrics> }>;
+}> {
   let tested = 0;
   let active = 0;
   let inactive = 0;
+  const enrichedChannels: Channel[] = [];
+  const testResults: StreamTestResult[] = [];
+  const qualityMetrics: Array<{ channelId: string; metrics: ReturnType<typeof calculateQualityMetrics> }> = [];
 
-  for (const channel of targetChannels) {
+  for (const channel of channels) {
     try {
+      // Test the channel
       const result = await tester.testChannel(channel);
-      await processor.saveTestResult(result);
       const isActive = result.status === 'success';
+      
+      // Calculate quality score
+      const qualityScore = calculateQualityScore(result);
+      
+      // Calculate quality metrics
+      const metrics = calculateQualityMetrics([result]);
+      
+      // Store test result and metrics for later saving
+      testResults.push(result);
+      qualityMetrics.push({ channelId: channel.id, metrics });
+      
+      // Create enriched channel with test results
+      const enrichedChannel: Channel = {
+        ...channel,
+        status: isActive ? 'active' : 'inactive',
+        lastTested: result.testedAt,
+        qualityScore,
+      };
+      
+      enrichedChannels.push(enrichedChannel);
+      
       if (isActive) {
         active += 1;
       } else {
         inactive += 1;
       }
-      await processor.patchChannel(channel.id, {
-        status: isActive ? 'active' : 'inactive',
-        lastTested: result.testedAt,
-        qualityScore: calculateQualityScore(result),
-      });
-      await processor.saveQualityMetrics(channel.id, calculateQualityMetrics([result]));
       tested += 1;
     } catch (error) {
       console.error(`Failed to test channel ${channel.id}:`, error);
-      await processor.patchChannel(channel.id, {
+      // Mark as inactive on error
+      const enrichedChannel: Channel = {
+        ...channel,
         status: 'inactive',
         lastTested: new Date().toISOString(),
-      });
+        qualityScore: 0,
+      };
+      enrichedChannels.push(enrichedChannel);
       tested += 1;
       inactive += 1;
     }
   }
 
-  return { tested, active, inactive };
+  return { tested, active, inactive, enrichedChannels, testResults, qualityMetrics };
 }
 
 /**
@@ -80,9 +100,11 @@ async function testChannelsForSource(
  * 1. Validates all required tables exist
  * 2. Initializes repositories if needed
  * 3. Fetches all repositories (force fetch)
- * 4. Parses and saves channels
- * 5. Tests channels (up to 100 per repository)
- * 6. Calculates quality metrics
+ * 4. Parses channels from M3U files
+ * 5. Tests ALL channels BEFORE saving (ensures status and quality scores are set)
+ * 6. Calculates quality metrics for ALL channels
+ * 7. Saves channels with complete data (status, qualityScore, lastTested)
+ * 8. Saves test results and quality metrics to their respective tables
  * 
  * Can be called manually from the UI to populate the database
  */
@@ -153,16 +175,36 @@ export async function POST() {
         }
 
         if (channels.length > 0) {
-          // Save channels
-          await processor.saveChannels(repository.id, channels);
+          // Step 1: Test ALL channels BEFORE saving (ensures status and quality scores are set)
+          console.log(`[Populate] Testing ${channels.length} channels for ${repository.id}...`);
+          const { tested, active, inactive, enrichedChannels, testResults, qualityMetrics } = await testAndEnrichChannels(channels);
 
-          // Test channels (limit to 100 per repository to avoid timeout)
-          const testResults = await testChannelsForSource(repository.id, 100);
+          // Step 2: Save channels with complete data (status, qualityScore, lastTested already set)
+          console.log(`[Populate] Saving ${enrichedChannels.length} channels with test results for ${repository.id}...`);
+          await processor.saveChannels(repository.id, enrichedChannels);
+
+          // Step 3: Save test results and quality metrics for all tested channels
+          console.log(`[Populate] Saving test results and quality metrics for ${repository.id}...`);
+          for (let i = 0; i < testResults.length; i++) {
+            try {
+              const testResult = testResults[i];
+              const { metrics } = qualityMetrics[i];
+              
+              // Save test result
+              await processor.saveTestResult(testResult);
+              
+              // Save quality metrics
+              await processor.saveQualityMetrics(testResult.channelId, metrics);
+            } catch (error) {
+              console.error(`Failed to save test data for channel ${testResults[i]?.channelId}:`, error);
+              // Continue with other channels
+            }
+          }
 
           results.push({
             repository: repository.id,
             channelsProcessed: channels.length,
-            testResults,
+            testResults: { tested, active, inactive },
           });
         } else {
           results.push({
