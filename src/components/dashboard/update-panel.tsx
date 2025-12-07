@@ -7,12 +7,18 @@ import { useRealTimeUpdates } from "@/hooks/useRealTimeUpdates";
 export function UpdatePanel() {
   const { updates, isConnected, clearUpdates } = useRealTimeUpdates();
   const [isPopulating, setIsPopulating] = useState(false);
+  const [isCleaning, setIsCleaning] = useState(false);
   const [populateResult, setPopulateResult] = useState<{
     success: boolean;
     message: string;
     totalChannels?: number;
     totalTested?: number;
     totalActive?: number;
+  } | null>(null);
+  const [cleanResult, setCleanResult] = useState<{
+    success: boolean;
+    message: string;
+    totalDeleted?: number;
   } | null>(null);
 
   function renderStatusBadge() {
@@ -67,6 +73,61 @@ export function UpdatePanel() {
     }
   }
 
+  async function handleCleanDatabase() {
+    // Confirm destructive action
+    const confirmed = window.confirm(
+      "⚠️ WARNING: This will delete ALL data from the database!\n\n" +
+      "This includes:\n" +
+      "• All channels\n" +
+      "• All test results\n" +
+      "• All quality metrics\n" +
+      "• All repositories\n" +
+      "• All repository updates\n\n" +
+      "This action cannot be undone. Are you sure you want to continue?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsCleaning(true);
+    setCleanResult(null);
+    
+    try {
+      const response = await fetch("/api/cron/clean-database", {
+        method: "POST",
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setCleanResult({
+          success: true,
+          message: data.message || "Database cleaned successfully",
+          totalDeleted: data.totalDeleted,
+        });
+        
+        // Refresh the page after a short delay
+        setTimeout(() => {
+          window.location.reload();
+        }, 2000);
+      } else {
+        setCleanResult({
+          success: false,
+          message: data.message || data.error || "Failed to clean database",
+        });
+      }
+    } catch (error) {
+      console.error("Error cleaning database:", error);
+      setCleanResult({
+        success: false,
+        message: error instanceof Error ? error.message : "Failed to clean database",
+      });
+    } finally {
+      setIsCleaning(false);
+    }
+  }
+
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -81,10 +142,18 @@ export function UpdatePanel() {
           <button
             type="button"
             onClick={handlePopulateDatabase}
-            disabled={isPopulating}
+            disabled={isPopulating || isCleaning}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {isPopulating ? "Populating..." : "Populate Database"}
+          </button>
+          <button
+            type="button"
+            onClick={handleCleanDatabase}
+            disabled={isPopulating || isCleaning}
+            className="rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {isCleaning ? "Cleaning..." : "Clean Database"}
           </button>
           <button
             type="button"
@@ -140,6 +209,48 @@ export function UpdatePanel() {
             <button
               type="button"
               onClick={() => setPopulateResult(null)}
+              className="text-zinc-400 hover:text-zinc-600"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+      {cleanResult && (
+        <div
+          className={`mt-4 rounded-lg border p-4 ${
+            cleanResult.success
+              ? "border-green-200 bg-green-50"
+              : "border-red-200 bg-red-50"
+          }`}
+        >
+          <div className="flex items-start justify-between">
+            <div>
+              <p
+                className={`text-sm font-semibold ${
+                  cleanResult.success ? "text-green-800" : "text-red-800"
+                }`}
+              >
+                {cleanResult.success ? "✓ Success" : "✗ Error"}
+              </p>
+              <p
+                className={`mt-1 text-sm ${
+                  cleanResult.success ? "text-green-700" : "text-red-700"
+                }`}
+              >
+                {cleanResult.message}
+              </p>
+              {cleanResult.success && cleanResult.totalDeleted !== undefined && (
+                <div className="mt-2 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-red-100 px-2 py-1 text-red-800">
+                    {cleanResult.totalDeleted} records deleted
+                  </span>
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setCleanResult(null)}
               className="text-zinc-400 hover:text-zinc-600"
             >
               ×
