@@ -34,6 +34,7 @@ export async function POST() {
         }
 
         // Delete the batch
+        // Type assertion needed because Supabase returns generic types
         const ids = data.map(function getIds(row) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           return (row as any)[idColumn] as string | number;
